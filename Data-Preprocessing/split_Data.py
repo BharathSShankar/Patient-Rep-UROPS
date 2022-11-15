@@ -1,24 +1,22 @@
 from data_helperFxns import *
+import pandas as pd
 
-pat_dat = read_csv_patients(
-    '../data/patientData/PATIENTS.csv',
-     ["DOB","DOD", "DOD_HOSP", "DOD_SSN"]
-    )
+pat_dat = pd.read_csv('../data/patientData/PATIENTS.csv')
+pat_dat = process_dates_pat(
+    pat_dat,
+    ["DOB","DOD", "DOD_HOSP", "DOD_SSN"]
+)
 
 Sub_DOB_mapping = {}
 for ind, row in pat_dat[["SUBJECT_ID", "DOB"]].iterrows():
     Sub_DOB_mapping[row.SUBJECT_ID] = row.DOB
 
-Sub_DOB_mapping = pd.DataFrame.from_dict(
-    Sub_DOB_mapping, 
-    orient='index', 
-    columns = ["DOB"])
 
-full_process('../data/patientData/ADMISSIONS.csv', 
-    ["ADMITTIME", "DISCHTIME", "DEATHTIME", "EDREGTIME", "EDOUTTIME"], 
-    Sub_DOB_mapping, 
-    "ADMITTIME", 
-    "Microbio")
+#full_process('../data/patientData/ADMISSIONS.csv', 
+#    ["ADMITTIME", "DISCHTIME", "DEATHTIME", "EDREGTIME", "EDOUTTIME"], 
+#    Sub_DOB_mapping, 
+#    "ADMITTIME", 
+#    "Adm")
 
 full_process('../data/patientData/INPUTEVENTS_CV.csv', 
     ["CHARTTIME"], 
