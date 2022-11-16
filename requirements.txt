@@ -4,3 +4,5 @@ torch
 transformers
 pandas
 numpy
+pytorch-lightning
+sentence-transformers

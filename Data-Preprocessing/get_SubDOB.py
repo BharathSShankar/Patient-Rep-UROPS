@@ -1,11 +1,13 @@
 import pandas as pd
 import pickle
-from data_helperFxns import read_csv_patients
+from data_helperFxns import process_dates_pat
 
-pat_dat = read_csv_patients(
+
+pat_dat = pd.read_csv(
     '../data/patientData/PATIENTS.csv',
-     ["DOB","DOD", "DOD_HOSP", "DOD_SSN"]
     )
+pat_dat = process_dates_pat(pat_dat
+     ,["DOB","DOD", "DOD_HOSP", "DOD_SSN"])
 
 Sub_DOB_mapping = {}
 for ind, row in pat_dat[["SUBJECT_ID", "DOB"]].iterrows():
