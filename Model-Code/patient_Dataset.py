@@ -53,21 +53,35 @@ class PatientData:
     def __str__(self) -> str:
         return str(self.patientId)
 
-class PatientDataset(Dataset):
 
-    def __init__(self, patient_details:str, transform):
-        with open(patient_details, 'rb') as pickle_file:
-            self.patientList = pickle.load(pickle_file)
-        self.transform = transform
-    
-    def __len__(self) -> int:
-        return len(self.patientList)
-    
-    def __getitem__(self, idx:int):
-        patIdx = self.patientList[idx]
-        return self.transform(PatientData(patIdx))
 
 def transform(patDat:PatientData):
+    num_default = torch.Tensor([[0]])
+    input_data, output_data, note_data, cpt_data, micro_data, lab_data = dict(
+        time = num_default,
+        var = num_default,
+        val = num_default
+    ), dict(
+        time = num_default,
+        var = num_default,
+        val = num_default
+    ), dict(
+        text = [""],
+        time = num_default
+    ), dict(
+        time = num_default,
+        procedure = num_default
+    ), dict(
+        time = num_default,
+        spec_data = num_default,
+        org_data = num_default,
+        inter =  num_default
+    ), dict(
+        time = num_default,
+        var = num_default,
+        val = num_default 
+    )
+
     dem_data = dict(
         gender = 0 if PAT_DATA[PAT_DATA["SUBJECT_ID"] == patDat.patientId]["GENDER"].iloc[0] == "F" else 1,
         ethnicity = eth_Encoder.transform(np.asarray(patDat.adm.ETHNICITY, dtype=object))[0],
@@ -78,38 +92,51 @@ def transform(patDat:PatientData):
     )
     if patDat.inputs is not None:
         input_data = dict(
-            time = torch.Tensor(patDat.inputs["STORETIME"].to_numpy()).T,
-            var = torch.Tensor(patDat.inputs["ITEMID"].to_numpy()).T,
-            val = torch.Tensor(patDat.inputs["AMOUNT"].to_numpy()).T,
+            time = torch.Tensor([patDat.inputs["STORETIME"].to_numpy()]).T,
+            var = torch.Tensor([patDat.inputs["ITEMID"].to_numpy()]).T,
+            val = torch.Tensor([patDat.inputs["AMOUNT"].to_numpy()]).T,
         )
     if patDat.outputs is not None:
         output_data = dict(
-            time = torch.Tensor(patDat.outputs["CHARTTIME"].to_numpy()).T,
-            var = torch.Tensor(patDat.outputs["ITEMID"].to_numpy()).T,
-            val = torch.Tensor(patDat.outputs["VALUE"].to_numpy()).T,
+            time = torch.Tensor([patDat.outputs["CHARTTIME"].to_numpy()]).T,
+            var = torch.Tensor([patDat.outputs["ITEMID"].to_numpy()]).T,
+            val = torch.Tensor([patDat.outputs["VALUE"].to_numpy()]).T,
+        )
+    if patDat.notes is not None:
+        note_data = dict(
+            text = patDat.notes["DESCRIPTION"],
+            time = torch.Tensor([patDat.outputs["CHARTTIME"].to_numpy()]).T,
         )
 
-    note_data = dict(
-        text = patDat.notes["DESCRIPTION"],
-        time = patDat.notes["CHARTTIME"]
-    )
+    if patDat.cpt is not None:
+        cpt_data = dict(
+            time = torch.Tensor([patDat.cpt["CHARTDATE"].to_numpy()]).T,
+            procedure = torch.Tensor([patDat.cpt["CPT_NUMBER"].to_numpy()]).T,
+        ) 
+    
+    micro_mappings = {
+        "S" : 1,
+        "R" : 2,
+        "I" : 3
+    }
 
-    cpt_data = dict(
-        time = torch.Tensor(patDat.cpt["CHARTDATE"].to_numpy()).T,
-        procedure = torch.Tensor(patDat.cpt["ITEMID"].to_numpy()).T,
-    ) 
-
-    micro_data = dict(
-        time = torch.Tensor(patDat.microbio["CHARTTIME"].to_numpy()).T,
-        spec_data = patDat.microbio["SPEC_ITEMID"],
-        org_data = patDat.microbio["ORG_ITEMID"],
-        inter = patDat.microbio["INTERPRETATION"]
-    )
+    if patDat.microbio is not None:
+        micro_data = dict(
+            time = torch.Tensor([patDat.microbio["CHARTTIME"].to_numpy()]).T,
+            spec_data = torch.Tensor([patDat.microbio["SPEC_ITEMID"].to_numpy()]).T,
+            org_data = torch.Tensor([patDat.microbio["ORG_ITEMID"].to_numpy()]).T,
+            inter = torch.Tensor([[micro_mappings.get(i, 0) for i in patDat.microbio["INTERPRETATION"]]]).T
+        )
+    
+    lab_mappings = {
+        'abnormal' : 1,
+        'delta': 2
+    }
 
     lab_data = dict(
-       time = torch.Tensor(patDat.labs["CHARTTIME"].to_numpy()).T,
-        var = torch.Tensor(patDat.labs["ITEMID"].to_numpy()),
-        val = torch.Tensor(patDat.labs["FLAG"].to_numpy()).T, 
+       time = torch.Tensor([patDat.labs["CHARTTIME"].to_numpy()]).T,
+        var = torch.Tensor([patDat.labs["ITEMID"].to_numpy()]).T,
+        val = torch.Tensor([[lab_mappings.get(i, 0) for i in patDat.labs["FLAG"].to_numpy()]]).T, 
     )
     
     return dict(
@@ -120,6 +147,17 @@ def transform(patDat:PatientData):
         cpt = cpt_data,
         micro = micro_data,
         lab = lab_data
-    )
+    ), PAT_DATA[PAT_DATA["SUBJECT_ID"] == patDat.patientId]["EXPIRE_FLAG"].iloc[0] 
 
-print(PatientDataset(PATIENT_LIST, transform)[10])
+class PatientDataset(Dataset):
+
+    def __init__(self, patient_list, transform = transform):
+        self.patientList = patient_list
+        self.transform = transform
+    
+    def __len__(self) -> int:
+        return len(self.patientList)
+    
+    def __getitem__(self, idx:int):
+        patIdx = self.patientList[idx]
+        return self.transform(PatientData(patIdx))

@@ -65,12 +65,13 @@ class TransformerEncoderUnit(nn.Module):
 
 class AttFusion(nn.Module):
 
-    def __init__(self, ffn_dims, embed_dims = 768):
+    def __init__(self, ffn_dims, embed_dims = 768, dropout = 0.2):
         super().__init__()
         ffn_list = [nn.Linear(embed_dims, ffn_dims[0])]
         for i in range(len(ffn_dims) - 1):
+            ffn_list.append(nn.GELU())
+            ffn_list.append(nn.Dropout(dropout))
             ffn_list.append(nn.Linear(ffn_dims[i], ffn_dims[i+1]))
-            ffn_list.append(nn.Dropout())
         ffn_list.append(nn.Tanh())
         self.ffn = nn.ModuleList(ffn_list)
         self.u = nn.Parameter(torch.rand(size = (ffn_dims[-1], 1)))
@@ -87,13 +88,13 @@ class AttFusion(nn.Module):
 
 class TransformerEncoderCTE(nn.Module):
     
-    def __init__(self, num_layers = 4):
+    def __init__(self, ffn_dims = (512, 120), embed_dim = 768, num_layers = 4):
         super().__init__() 
         self.cteModule = InitTriplet()
         self.transformerModules = nn.ModuleList(
-            modules=[TransformerEncoderUnit() for i in range(num_layers)]
+            modules=[TransformerEncoderUnit(embed_dim) for i in range(num_layers)]
         )
-        self.attFusion = AttFusion((512, 120))
+        self.attFusion = AttFusion(ffn_dims, embed_dims=embed_dim)
 
     def forward(self, var, time, val):
         emb = self.cteModule(var, time, val)
@@ -121,13 +122,13 @@ class TimeObsEncoder(nn.Module):
         return emb + timeEmb
     
 class TransformerEncoder(nn.Module):
-    def __init__(self, encoder, num_layers = 4):
+    def __init__(self, encoder, ffn_dims = (512, 120), embed_dim = 768, num_layers = 4):
         super().__init__()
         self.encoder = encoder()
         self.transformerModules = nn.ModuleList(
-            modules=[TransformerEncoderUnit() for i in range(num_layers)]
+            modules=[TransformerEncoderUnit(embed_dim) for i in range(num_layers)]
         )
-        self.attFusion = AttFusion((512, 120))
+        self.attFusion = AttFusion(ffn_dims, embed_dims=embed_dim)
 
     def forward(self, val, time):
         emb = self.encoder(val, time)
@@ -149,13 +150,13 @@ class LabQuad(nn.Module):
 
 class TransformerEncoderQuad(nn.Module):
     
-    def __init__(self, num_layers = 4):
+    def __init__(self, ffn_dims = (512, 120), embed_dim = 768, num_layers = 4):
         super().__init__() 
         self.labQuad = LabQuad()
         self.transformerModules = nn.ModuleList(
-            modules=[TransformerEncoderUnit() for i in range(num_layers)]
+            modules=[TransformerEncoderUnit(embed_dim) for i in range(num_layers)]
         )
-        self.attFusion = AttFusion((512, 120))
+        self.attFusion = AttFusion(ffn_dims, embed_dim)
 
     def forward(self, spec, time, org, val):
         emb = self.labQuad(spec, time, org, val)
@@ -163,7 +164,7 @@ class TransformerEncoderQuad(nn.Module):
             emb, wts = layer(emb)
         return self.attFusion(emb)    
 
-class Discriminator(nn.Module):
+class MLP(nn.Module):
     def __init__(self):
         super().__init__()
         self.classifier = nn.Sequential(

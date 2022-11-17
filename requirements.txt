@@ -6,3 +6,4 @@ pandas
 numpy
 pytorch-lightning
 sentence-transformers
+ray[tune]
