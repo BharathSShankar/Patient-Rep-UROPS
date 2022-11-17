@@ -1,6 +1,7 @@
 from subModules import *
 import pytorch_lightning as pl
 import torch.nn.functional as F
+from torchmetrics import Accuracy
 
 class FullModel(pl.LightningModule):
     def __init__(self, config):
@@ -26,21 +27,21 @@ class FullModel(pl.LightningModule):
             num_layers=self.num_layers, embed_dim=self.embedDim
         )
         self.noteEncoder = TransformerEncoder(
-            encoder = NoteEncoder(), num_layers=self.num_layers, embed_dim=self.embedDim
+            encoder = TimeObsEncoder(self.embedDim), num_layers=self.num_layers, embed_dim=self.embedDim
         )
         self.cptEncoder = TransformerEncoder(
-            nn.LazyLinear(self.embedDim), num_layers=self.num_layers, embed_dim=self.embedDim
+            TimeObsEncoder(self.embedDim), num_layers=self.num_layers, embed_dim=self.embedDim
         )
         self.demEncoder = nn.LazyLinear(self.embedDim)
 
         self.condensor = nn.LazyLinear(self.finalDim)
 
-        self.class_accuracy = pl.metrics.Accuracy()
+        self.class_accuracy = Accuracy()
 
         self.discriminator = MLP()
         self.classifier = MLP()
 
-    def foward(self, patDat):
+    def forward(self, patDat):
 
         inpDat = patDat["inputs"]
         inpDat = self.inputEncoder(inpDat["var"], inpDat["time"], inpDat["val"])
@@ -52,13 +53,13 @@ class FullModel(pl.LightningModule):
         labDat = self.labEncoder(labDat["var"], labDat["time"], labDat["val"])
 
         noteDat = patDat["note"]
-        labDat = self.noteEncoder(noteDat["text"], noteDat["time"])
+        noteDat = self.noteEncoder(noteDat["text"], noteDat["time"])
 
         cptDat = patDat["cpt"]
         cptDat = self.cptEncoder(cptDat["procedure"], cptDat["time"])
 
         microDat = patDat["micro"]
-        microDat = self.microEncoder(microDat["spec"], microDat["time"], microDat["org"], microDat["inter"])
+        microDat = self.microEncoder(microDat["spec_data"], microDat["time"], microDat["org_data"], microDat["inter"])
     
         demDat = patDat["dem"]
         demDat = self.demEncoder(demDat)
@@ -73,21 +74,23 @@ class FullModel(pl.LightningModule):
             weight_decay=self.wd
         )
     
-    def discriminate(self, x):
-        if torch.randint(0, 1) == 1:
-            return self.discriminator(x), 1
+    def discriminate(self, val):
+        disc_val = self.discriminator(val).to(torch.float)
+        fake_val = self.discriminator(torch.rand_like(val)).to(torch.float)
+        if torch.randint_like(torch.Tensor(1), 0, 1) == 1:
+            return disc_val, torch.ones_like(disc_val).to(torch.float)
         else:
-            return self.discriminator(torch.rand_like(x)), 0
+            return fake_val, torch.zeros_like(fake_val).to(torch.float)
 
     def training_step(self, train_batch, batch_idx):
         x, y = train_batch
         rep = self.forward(x)
         class_val = self.classifier(rep)
-        disc_val, is_real = self.discriminate(x)
-        class_loss = F.binary_cross_entropy(class_val, y)
+        disc_val, is_real = self.discriminate(rep)
+        class_loss = F.binary_cross_entropy(class_val, y.to(torch.float))
         disc_loss = F.binary_cross_entropy(disc_val, is_real)
         loss = class_loss + self.beta * disc_loss
-        acc = self.accuracy(class_val, y)
+        acc = self.class_accuracy(class_val, y.to(torch.int))
         self.log("ptl/train_loss", loss)
         self.log("ptl/train_accuracy", acc)
         return loss
@@ -96,11 +99,11 @@ class FullModel(pl.LightningModule):
         x, y = val_batch
         rep = self.forward(x)
         class_val = self.classifier(rep)
-        disc_val, is_real = self.discriminate(x)
-        class_loss = F.binary_cross_entropy(class_val, y)
+        disc_val, is_real = self.discriminate(rep)
+        class_loss = F.binary_cross_entropy(class_val, y.to(torch.float))
         disc_loss = F.binary_cross_entropy(disc_val, is_real)
         loss = class_loss + self.beta * disc_loss
-        acc = self.accuracy(class_val, y)
+        acc = self.class_accuracy(class_val, y.to(torch.int))
         return {"val_loss": loss, "val_accuracy": acc}
     
     def validation_epoch_end(self, outputs):

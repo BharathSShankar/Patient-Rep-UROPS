@@ -1,16 +1,6 @@
 import torch
-from torch import nn, utils
-from torch.nn import functional as F
-import pytorch_lightning as pl
+from torch import nn
 
-from transformers import AutoTokenizer, AutoModel
-from sentence_transformers import SentenceTransformer
-
-import nltk
-from nltk import sent_tokenize
-nltk.download('punkt')
-
-SENT_MODEL = SentenceTransformer('sentence-transformers/paraphrase-albert-small-v2')
 
 class Time2VecPos(nn.Module):
     
@@ -22,7 +12,7 @@ class Time2VecPos(nn.Module):
     
     def forward(self, input):
         x = torch.matmul(input, self.weights) + self.bias
-        x[1:] = self.fxn(x[1:])
+        x = self.fxn(x)
         return x
 
 class InitTriplet(nn.Module):
@@ -83,16 +73,16 @@ class AttFusion(nn.Module):
             att = layer(att)
         att = torch.matmul(att, self.u)
         att = self.smax(att)
-        x = torch.sum(x * att, dim = 0)
+        x = torch.sum(x * att, dim = 1)
         return x
 
 class TransformerEncoderCTE(nn.Module):
     
     def __init__(self, ffn_dims = (512, 120), embed_dim = 768, num_layers = 4):
         super().__init__() 
-        self.cteModule = InitTriplet()
+        self.cteModule = InitTriplet(embed_dim)
         self.transformerModules = nn.ModuleList(
-            modules=[TransformerEncoderUnit(embed_dim) for i in range(num_layers)]
+            modules=[TransformerEncoderUnit(embedding_dim = embed_dim) for i in range(num_layers)]
         )
         self.attFusion = AttFusion(ffn_dims, embed_dims=embed_dim)
 
@@ -102,19 +92,12 @@ class TransformerEncoderCTE(nn.Module):
             emb, wts = layer(emb)
         return self.attFusion(emb)    
 
-class NoteEncoder(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.sentence_model = SENT_MODEL
-    
-    def forward(self, x):
-        return self.sentence_model.encode(x)
 
 class TimeObsEncoder(nn.Module):
-    def __init__(self, encoder):
+    def __init__(self, embed_dim):
         super().__init__()
-        self.encoder = encoder
-        self.time2vec = Time2VecPos()
+        self.encoder = nn.LazyLinear(embed_dim)
+        self.time2vec = Time2VecPos(embed_dim)
     
     def forward(self, x, time):
         emb = self.encoder(x)
@@ -124,7 +107,7 @@ class TimeObsEncoder(nn.Module):
 class TransformerEncoder(nn.Module):
     def __init__(self, encoder, ffn_dims = (512, 120), embed_dim = 768, num_layers = 4):
         super().__init__()
-        self.encoder = encoder()
+        self.encoder = encoder
         self.transformerModules = nn.ModuleList(
             modules=[TransformerEncoderUnit(embed_dim) for i in range(num_layers)]
         )
@@ -152,7 +135,7 @@ class TransformerEncoderQuad(nn.Module):
     
     def __init__(self, ffn_dims = (512, 120), embed_dim = 768, num_layers = 4):
         super().__init__() 
-        self.labQuad = LabQuad()
+        self.labQuad = LabQuad(embed_dim)
         self.transformerModules = nn.ModuleList(
             modules=[TransformerEncoderUnit(embed_dim) for i in range(num_layers)]
         )

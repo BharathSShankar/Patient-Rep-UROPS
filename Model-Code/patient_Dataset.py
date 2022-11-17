@@ -1,12 +1,16 @@
+import math
 import torch
 import os
 import pandas as pd
-import numpy as np
 import pickle
+import numpy as np
 from torch.utils.data import Dataset
 from sklearn.preprocessing import LabelEncoder
+from sentence_transformers import SentenceTransformer
 
-PAT_DATA = pd.read_csv("../data/dataByPatient/PATIENTS.csv")
+SENT_MODEL = SentenceTransformer('../Sent_Model')
+
+PAT_DATA = pd.read_csv("../data/patientData/PATIENTS.csv")
 adm_dat = pd.read_csv("../data/patientData/ADMISSIONS.csv")
 
 eth_list = adm_dat["ETHNICITY"].unique()
@@ -27,15 +31,15 @@ def getPatientData(patientId : int, directory : str):
         try:
             out[subDir] = pd.read_csv(
                 f"{directory}/{subDir}/{patientId}.csv", engine = "python"
-                )
+                ).fillna(method='bfill')
         except FileNotFoundError:
             out[subDir] = None
         except NotADirectoryError:
             pass
     return out
-
-DATA_DIR = "../data/dataByPatient"
-PATIENT_LIST = '../data/dataByPatient/patientList.pkl'
+base = "/scratch/e0550582/UROPS_Proj"
+DATA_DIR = base + "/data/dataByPatient"
+PATIENT_LIST = base + '/data/dataByPatient/patientList.pkl'
 
 class PatientData:
 
@@ -56,7 +60,7 @@ class PatientData:
 
 
 def transform(patDat:PatientData):
-    num_default = torch.Tensor([[0]])
+    num_default = torch.Tensor([[1e-6]])
     input_data, output_data, note_data, cpt_data, micro_data, lab_data = dict(
         time = num_default,
         var = num_default,
@@ -66,7 +70,7 @@ def transform(patDat:PatientData):
         var = num_default,
         val = num_default
     ), dict(
-        text = [""],
+        text = SENT_MODEL.encode([""]),
         time = num_default
     ), dict(
         time = num_default,
@@ -82,49 +86,52 @@ def transform(patDat:PatientData):
         val = num_default 
     )
 
-    dem_data = dict(
-        gender = 0 if PAT_DATA[PAT_DATA["SUBJECT_ID"] == patDat.patientId]["GENDER"].iloc[0] == "F" else 1,
-        ethnicity = eth_Encoder.transform(np.asarray(patDat.adm.ETHNICITY, dtype=object))[0],
-        religion = rel_Encoder.transform(np.asarray(patDat.adm.RELIGION, dtype=object))[0],
-        insurance = ins_Encoder.transform(np.asarray(patDat.adm.INSURANCE, dtype=object))[0],
-        mar_stat = mar_Encoder.transform(np.asarray(patDat.adm.MARITAL_STATUS, dtype=object))[0],
-        lang = lang_Encoder.transform(np.asarray(patDat.adm.LANGUAGE, dtype=object))[0]
-    )
-    if patDat.inputs is not None:
+    dem_data = torch.Tensor([
+        0 if PAT_DATA[PAT_DATA["SUBJECT_ID"] == patDat.patientId]["GENDER"].iloc[0] == "F" else 1,
+        0 if math.isnan(eth_Encoder.transform(np.asarray(patDat.adm.ETHNICITY, dtype=object))[0]) else eth_Encoder.transform(np.asarray(patDat.adm.ETHNICITY, dtype=object))[0],
+        0 if math.isnan(lang_Encoder.transform(np.asarray(patDat.adm.LANGUAGE, dtype=object))[0]) else lang_Encoder.transform(np.asarray(patDat.adm.LANGUAGE, dtype=object))[0],
+        0 if math.isnan(rel_Encoder.transform(np.asarray(patDat.adm.RELIGION, dtype=object))[0]) else rel_Encoder.transform(np.asarray(patDat.adm.RELIGION, dtype=object))[0],
+        0 if math.isnan(ins_Encoder.transform(np.asarray(patDat.adm.INSURANCE, dtype=object))[0]) else ins_Encoder.transform(np.asarray(patDat.adm.INSURANCE, dtype=object))[0],
+        0 if math.isnan(mar_Encoder.transform(np.asarray(patDat.adm.MARITAL_STATUS, dtype=object))[0]) else mar_Encoder.transform(np.asarray(patDat.adm.MARITAL_STATUS, dtype=object))[0]
+    ])
+    if not (patDat.inputs is None):
         input_data = dict(
-            time = torch.Tensor([patDat.inputs["STORETIME"].to_numpy()]).T,
-            var = torch.Tensor([patDat.inputs["ITEMID"].to_numpy()]).T,
-            val = torch.Tensor([patDat.inputs["AMOUNT"].to_numpy()]).T,
+            time = torch.Tensor([list(patDat.inputs["STORETIME"].fillna(0))]).T,
+            var = torch.Tensor([list(patDat.inputs["ITEMID"].fillna(0))]).T,
+            val = torch.Tensor([list(patDat.inputs["AMOUNT"].fillna(0))]).T,
         )
-    if patDat.outputs is not None:
+    
+    if not (patDat.outputs is None):
         output_data = dict(
-            time = torch.Tensor([patDat.outputs["CHARTTIME"].to_numpy()]).T,
-            var = torch.Tensor([patDat.outputs["ITEMID"].to_numpy()]).T,
-            val = torch.Tensor([patDat.outputs["VALUE"].to_numpy()]).T,
+            time = torch.Tensor([list(patDat.outputs["CHARTTIME"].fillna(0))]).T,
+            var = torch.Tensor([list(patDat.outputs["ITEMID"].fillna(0))]).T,
+            val = torch.Tensor([list(patDat.outputs["VALUE"].fillna(1))]).T,
         )
-    if patDat.notes is not None:
+    
+    if not (patDat.notes is None):
         note_data = dict(
-            text = patDat.notes["DESCRIPTION"],
-            time = torch.Tensor([patDat.outputs["CHARTTIME"].to_numpy()]).T,
+            text = SENT_MODEL.encode(list(patDat.notes["DESCRIPTION"].fillna(""))),
+            time = torch.Tensor([list(patDat.notes["CHARTTIME"].fillna(0))]).T,
         )
 
-    if patDat.cpt is not None:
+    if not (patDat.cpt is None):
         cpt_data = dict(
-            time = torch.Tensor([patDat.cpt["CHARTDATE"].to_numpy()]).T,
-            procedure = torch.Tensor([patDat.cpt["CPT_NUMBER"].to_numpy()]).T,
-        ) 
+            time = torch.Tensor([list(patDat.cpt["CHARTDATE"].fillna(0))]).T,
+            procedure = torch.Tensor([list(patDat.cpt["CPT_NUMBER"].fillna(0))]).T,
+        )
     
     micro_mappings = {
         "S" : 1,
         "R" : 2,
-        "I" : 3
+        "I" : 3,
+        np.nan: 0 
     }
 
-    if patDat.microbio is not None:
+    if not (patDat.microbio is None):
         micro_data = dict(
-            time = torch.Tensor([patDat.microbio["CHARTTIME"].to_numpy()]).T,
-            spec_data = torch.Tensor([patDat.microbio["SPEC_ITEMID"].to_numpy()]).T,
-            org_data = torch.Tensor([patDat.microbio["ORG_ITEMID"].to_numpy()]).T,
+            time = torch.Tensor([list(patDat.microbio["CHARTTIME"].fillna(0))]).T,
+            spec_data = torch.Tensor([list(patDat.microbio["SPEC_ITEMID"].fillna(0))]).T,
+            org_data = torch.Tensor([list(patDat.microbio["ORG_ITEMID"].fillna(0))]).T,
             inter = torch.Tensor([[micro_mappings.get(i, 0) for i in patDat.microbio["INTERPRETATION"]]]).T
         )
     
@@ -132,22 +139,22 @@ def transform(patDat:PatientData):
         'abnormal' : 1,
         'delta': 2
     }
-
-    lab_data = dict(
-       time = torch.Tensor([patDat.labs["CHARTTIME"].to_numpy()]).T,
-        var = torch.Tensor([patDat.labs["ITEMID"].to_numpy()]).T,
-        val = torch.Tensor([[lab_mappings.get(i, 0) for i in patDat.labs["FLAG"].to_numpy()]]).T, 
-    )
+    if not(patDat.labs is None):
+        lab_data = dict(
+            time = torch.Tensor([list(patDat.labs["CHARTTIME"].fillna(0))]).T,
+            var = torch.Tensor([list(patDat.labs["ITEMID"].fillna(0))]).T,
+            val = torch.Tensor([[lab_mappings.get(i, 0) for i in patDat.labs["FLAG"].to_numpy()]]).T, 
+        )
     
     return dict(
         dem = dem_data,
         inputs = input_data,
-        output = output_data,
+        outputs = output_data,
         note = note_data,
         cpt = cpt_data,
         micro = micro_data,
         lab = lab_data
-    ), PAT_DATA[PAT_DATA["SUBJECT_ID"] == patDat.patientId]["EXPIRE_FLAG"].iloc[0] 
+    ), torch.tensor([PAT_DATA[PAT_DATA["SUBJECT_ID"] == patDat.patientId]["EXPIRE_FLAG"].iloc[0]], dtype = torch.float)
 
 class PatientDataset(Dataset):
 
@@ -161,3 +168,4 @@ class PatientDataset(Dataset):
     def __getitem__(self, idx:int):
         patIdx = self.patientList[idx]
         return self.transform(PatientData(patIdx))
+
