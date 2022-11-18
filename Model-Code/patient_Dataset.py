@@ -9,6 +9,8 @@ from sklearn.preprocessing import LabelEncoder
 from sentence_transformers import SentenceTransformer
 
 SENT_MODEL = SentenceTransformer('../Sent_Model')
+for param in SENT_MODEL.parameters():
+    param.requires_grad = False
 
 PAT_DATA = pd.read_csv("../data/patientData/PATIENTS.csv")
 adm_dat = pd.read_csv("../data/patientData/ADMISSIONS.csv")
@@ -37,7 +39,7 @@ def getPatientData(patientId : int, directory : str):
         except NotADirectoryError:
             pass
     return out
-base = "/scratch/e0550582/UROPS_Proj"
+base = "/hpctmp/e0550582/UROPS_Proj"
 DATA_DIR = base + "/data/dataByPatient"
 PATIENT_LIST = base + '/data/dataByPatient/patientList.pkl'
 

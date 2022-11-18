@@ -6,14 +6,14 @@ from torch.utils.data import DataLoader
 import pytorch_lightning as pl
 from patient_Dataset import *
 from fullModel import *
-from ray.tune.integration.pytorch_lightning import TuneReportCallback
+from ray.tune.integration.pytorch_lightning import TuneReportCheckpointCallback
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 
 PATIENT_LIST = '/hpctmp/e0550582/UROPS_Proj/data/dataByPatient/patientList.pkl'
 
 
 def train_model(config, data_dir = PATIENT_LIST, num_gpus = 1):
-
+    dev = torch.device("cuda:0")
     with open(data_dir, 'rb') as pickle_file:
             patientList = pickle.load(pickle_file) 
 
@@ -33,13 +33,15 @@ def train_model(config, data_dir = PATIENT_LIST, num_gpus = 1):
         for i in data[0].keys():
             if i == "dem":
                 data_out[i] = pad_sequence(
-                    [data[k][i] for k in range(len(batch))], batch_first=True).to(torch.float)
+                    [data[k][i] for k in range(len(batch))], batch_first=True
+                )
             else:
                 data_out[i] = {}
                 for j in data[0][i].keys():
                     data_out[i][j] = pad_sequence(
-                        [torch.Tensor(data[k][i][j]) for k in range(len(batch))], batch_first=True).to(torch.float)
-        targets = torch.Tensor([[item[1]] for item in batch]).to(torch.float)
+                        [torch.Tensor(data[k][i][j]) for k in range(len(batch))], batch_first=True
+                    )
+        targets = torch.Tensor([[item[1]] for item in batch])
         return [data_out, targets]
 
     train_loader = DataLoader(
@@ -56,30 +58,32 @@ def train_model(config, data_dir = PATIENT_LIST, num_gpus = 1):
         collate_fn=my_collate
     )
 
-    callbacks = [TuneReportCallback(
-                {
-                    "loss": "ptl/val_loss",
-                    "mean_accuracy": "ptl/val_accuracy"
-                },
-                on="validation_end"),
-        EarlyStopping(monitor="val_accuracy", min_delta=1e-5, patience=3, verbose=False, mode="max")]
+    callbacks = [TuneReportCheckpointCallback(
+        metrics={
+            "loss": "ptl/val_loss",
+            "mean_accuracy": "ptl/val_accuracy"
+        },
+        filename="checkpoint",
+        on="validation_end"),
+        EarlyStopping(monitor="ptl/val_accuracy", min_delta=1e-4, patience=2, verbose=False, mode="max")]
 
     trainer = pl.Trainer(
             max_epochs=config["num_epochs"],
-            callbacks=callbacks
+            callbacks=callbacks,
+            accelerator="gpu"
         )
     
     trainer.fit(model, train_loader, val_loader)
 
 config = {
-    "num_layers": tune.choice([1, 4, 8]),
-    "embedDim": tune.choice([512, 768]),
-    "finalDim":tune.choice([120, 240]),
+    "num_layers": tune.choice([4, 8]),
+    "embedDim": tune.choice([256, 512]),
+    "finalDim":tune.choice([30, 60]),
     "wd":tune.choice([1e-5, 1e-3]),
     "beta": tune.loguniform(1e-6, 1e2), 
     "lr": tune.loguniform(1e-7, 1e-5),
-    "batch_size": tune.choice([64, 128, 256]),
-    "num_epochs" : tune.choice([100, 200])
+    "batch_size": tune.choice([16, 32]),
+    "num_epochs" : tune.choice([100])
 }
 
 trainable = tune.with_parameters(
