@@ -28,7 +28,7 @@ class InitTriplet(nn.Module):
 
 class TransformerEncoderUnit(nn.Module):
 
-    def __init__(self, embedding_dim = 768 ,hidden_dim = 3072, nheads = 4):
+    def __init__(self, embedding_dim = 768 ,hidden_dim = 768, nheads = 4):
         super().__init__()
         self.mHeadAttention = nn.MultiheadAttention(embedding_dim, 
                                                     nheads, 
@@ -47,11 +47,11 @@ class TransformerEncoderUnit(nn.Module):
         self.layerNorm2 = nn.LayerNorm(embedding_dim)
     
     def forward(self, x):
-        attn, attnWeights = self.mHeadAttention(x, x, x)
+        attn, _ = self.mHeadAttention(x, x, x)
         x = self.layerNorm1(attn + x)
         xOut = self.ffn(x)
         x = self.layerNorm2(x + xOut)
-        return x, attnWeights
+        return x
 
 class AttFusion(nn.Module):
 
@@ -89,7 +89,7 @@ class TransformerEncoderCTE(nn.Module):
     def forward(self, var, time, val):
         emb = self.cteModule(var, time, val)
         for layer in self.transformerModules:
-            emb, wts = layer(emb)
+            emb = layer(emb)
         return self.attFusion(emb)    
 
 
@@ -116,7 +116,7 @@ class TransformerEncoder(nn.Module):
     def forward(self, val, time):
         emb = self.encoder(val, time)
         for layer in self.transformerModules:
-            emb, wts = layer(emb)
+            emb = layer(emb)
         return self.attFusion(emb)     
 
 class LabQuad(nn.Module):
@@ -144,7 +144,7 @@ class TransformerEncoderQuad(nn.Module):
     def forward(self, spec, time, org, val):
         emb = self.labQuad(spec, time, org, val)
         for layer in self.transformerModules:
-            emb, wts = layer(emb)
+            emb = layer(emb)
         return self.attFusion(emb)    
 
 class MLP(nn.Module):

@@ -87,12 +87,12 @@ class FullModel(pl.LightningModule):
         rep = self.forward(x)
         class_val = self.classifier(rep)
         disc_val, is_real = self.discriminate(rep)
-        class_loss = F.binary_cross_entropy(class_val, y.to(torch.float))
+        class_loss = F.binary_cross_entropy(class_val, y)
         disc_loss = F.binary_cross_entropy(disc_val, is_real)
         loss = class_loss + self.beta * disc_loss
         acc = self.class_accuracy(class_val, y.to(torch.int))
-        self.log("ptl/train_loss", loss.detach(), on_epoch=False, on_step= True)
-        self.log("ptl/train_accuracy", acc.detach(), on_epoch=False, on_step=True)
+        self.log("ptl/train_loss", loss.detach().cpu(), on_epoch=False, on_step= True)
+        self.log("ptl/train_accuracy", acc.detach().cpu(), on_epoch=False, on_step=True)
         return loss
     
     def validation_step(self, val_batch, batch_idx):
@@ -100,11 +100,11 @@ class FullModel(pl.LightningModule):
         rep = self.forward(x)
         class_val = self.classifier(rep)
         disc_val, is_real = self.discriminate(rep)
-        class_loss = F.binary_cross_entropy(class_val, y.to( torch.float))
+        class_loss = F.binary_cross_entropy(class_val, y)
         disc_loss = F.binary_cross_entropy(disc_val, is_real)
         loss = class_loss + self.beta * disc_loss
         acc = self.class_accuracy(class_val, y.to(torch.int))
-        return {"val_loss": loss.detach(), "val_accuracy": acc.detach()}
+        return {"val_loss": loss.detach().cpu(), "val_accuracy": acc.detach().cpu()}
     
     def validation_epoch_end(self, outputs):
         avg_loss = torch.stack(

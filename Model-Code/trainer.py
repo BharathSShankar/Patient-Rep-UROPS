@@ -39,7 +39,7 @@ def train_model(config, data_dir = PATIENT_LIST, num_gpus = 1):
                 data_out[i] = {}
                 for j in data[0][i].keys():
                     data_out[i][j] = pad_sequence(
-                        [torch.Tensor(data[k][i][j]) for k in range(len(batch))], batch_first=True
+                        [torch.Tensor(data[k][i][j])[:256] for k in range(len(batch))], batch_first=True
                     )
         targets = torch.Tensor([[item[1]] for item in batch])
         return [data_out, targets]
@@ -82,7 +82,7 @@ config = {
     "wd":tune.choice([1e-5, 1e-3]),
     "beta": tune.loguniform(1e-6, 1e2), 
     "lr": tune.loguniform(1e-7, 1e-5),
-    "batch_size": tune.choice([16, 32]),
+    "batch_size": tune.choice([8, 16]),
     "num_epochs" : tune.choice([100])
 }
 
