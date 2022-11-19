@@ -7,7 +7,7 @@ import pytorch_lightning as pl
 from patient_Dataset import *
 from fullModel import *
 from ray.tune.integration.pytorch_lightning import TuneReportCheckpointCallback
-from pytorch_lightning.callbacks.early_stopping import EarlyStopping
+from ray.tune.schedulers import ASHAScheduler
 
 PATIENT_LIST = '/hpctmp/e0550582/UROPS_Proj/data/dataByPatient/patientList.pkl'
 
@@ -17,12 +17,12 @@ def train_model(config, data_dir = PATIENT_LIST, num_gpus = 1):
     with open(data_dir, 'rb') as pickle_file:
             patientList = pickle.load(pickle_file) 
 
-    random.shuffle(patientList)
+    random.Random(42).shuffle(patientList)
     
     model = FullModel(config)
 
-    train_list = patientList[:42000]
-    val_list = patientList[42000:]
+    train_list = patientList[:40000]
+    val_list = patientList[40000:44000]
     
     train_dataset = PatientDataset(train_list)
     val_dataset = PatientDataset(val_list)
@@ -64,8 +64,7 @@ def train_model(config, data_dir = PATIENT_LIST, num_gpus = 1):
             "mean_accuracy": "ptl/val_accuracy"
         },
         filename="checkpoint",
-        on="validation_end"),
-        EarlyStopping(monitor="ptl/val_accuracy", min_delta=1e-4, patience=2, verbose=False, mode="max")]
+        on="validation_end")]
 
     trainer = pl.Trainer(
             max_epochs=config["num_epochs"],
@@ -76,20 +75,27 @@ def train_model(config, data_dir = PATIENT_LIST, num_gpus = 1):
     trainer.fit(model, train_loader, val_loader)
 
 config = {
-    "num_layers": tune.choice([4, 8]),
-    "embedDim": tune.choice([256, 512]),
-    "finalDim":tune.choice([30, 60]),
-    "wd":tune.choice([1e-5, 1e-3]),
-    "beta": tune.loguniform(1e-6, 1e2), 
-    "lr": tune.loguniform(1e-7, 1e-5),
-    "batch_size": tune.choice([8, 16]),
-    "num_epochs" : tune.choice([100])
+    "num_layers": tune.choice([4]),
+    "embedDim": tune.choice([512]),
+    "finalDim":tune.choice([120]),
+    "wd":tune.choice([1e-5]),
+    "beta": tune.choice([1e-1, 2]), 
+    "lr": tune.choice([1e-5]),
+    "batch_size": tune.choice([16]),
+    "num_epochs" : tune.choice([10])
 }
 
 trainable = tune.with_parameters(
     train_model,
     data_dir=PATIENT_LIST,
     num_gpus=1)
+
+asha_scheduler = ASHAScheduler(
+    time_attr='training_iteration',
+    max_t=10,
+    grace_period=4,
+    reduction_factor=2,
+    brackets=1)
 
 analysis = tune.run(
     trainable,
@@ -99,6 +105,9 @@ analysis = tune.run(
     },
     metric="loss",
     mode="min",
+    scheduler=asha_scheduler,
+    local_dir = "~/ray_results/checkpoint",
+    checkpoint_freq = 1,
     config=config,
     name="tune_MIMIC")
 
