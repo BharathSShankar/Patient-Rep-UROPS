@@ -79,7 +79,7 @@ config = {
     "embedDim": tune.choice([512]),
     "finalDim":tune.choice([120]),
     "wd":tune.choice([1e-5]),
-    "beta": tune.choice([1e-1, 2]), 
+    "beta": tune.choice([20]), 
     "lr": tune.choice([1e-5]),
     "batch_size": tune.choice([16]),
     "num_epochs" : tune.choice([10])

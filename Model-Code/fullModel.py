@@ -2,6 +2,7 @@ from subModules import *
 import pytorch_lightning as pl
 import torch.nn.functional as F
 from torchmetrics import Accuracy
+from gradient_reversal.module import GradientReversal
 
 class FullModel(pl.LightningModule):
     def __init__(self, config):
@@ -37,8 +38,14 @@ class FullModel(pl.LightningModule):
         self.condensor = nn.LazyLinear(self.finalDim)
 
         self.class_accuracy = Accuracy()
-
+        """
+        self.discriminator = nn.Sequential(
+            GradientReversal(0.1),
+            MLP()
+        )
+        """
         self.discriminator = MLP()
+
         self.classifier = MLP()
 
     def forward(self, patDat):
