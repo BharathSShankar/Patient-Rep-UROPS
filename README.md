@@ -8,6 +8,7 @@ A deep learning framework for predicting in-hospital patient mortality using the
 
 - [Overview](#overview)
 - [Architecture](#architecture)
+- [Mathematical Deep Dive](#mathematical-deep-dive)
 - [Project Structure](#project-structure)
 - [Data](#data)
 - [Setup](#setup)
@@ -67,6 +68,250 @@ Patient EHR
 3. Passes through a `condensor` linear layer to produce a final patient embedding.
 4. Feeds the embedding to a `classifier` (binary cross-entropy, mortality prediction) and a `discriminator` (adversarial regularisation).
 5. Optimises the combined loss: `loss = class_loss + beta * disc_loss`.
+
+---
+
+## Mathematical Deep Dive
+
+This section explains the mathematics behind every component of the model, from individual sub-modules up to the full training objective.
+
+---
+
+### 1. Time Encoding — `Time2VecPos`
+
+Clinical events are irregularly sampled in time. Rather than using a fixed sinusoidal positional encoding (as in the original Transformer), the model uses a **learnable** Time2Vec encoding.
+
+For a scalar timestamp `t`, the encoding produces a `d`-dimensional vector:
+
+```
+Time2Vec(t)_i = sin(w_i · t + b_i)    for i = 1, ..., d
+```
+
+where `w ∈ ℝ^d` and `b ∈ ℝ^d` are **learned parameters** (initialised randomly). This allows the model to discover the most useful temporal frequencies for the task, rather than relying on hand-crafted frequencies. The sinusoidal activation makes the encoding periodic and bounded, which helps with gradient flow.
+
+In code ([`subModules.py`](Model-Code/subModules.py:6)):
+```python
+x = torch.matmul(input, self.weights) + self.bias   # shape: (batch, seq, d)
+x = torch.sin(x)
+```
+
+---
+
+### 2. Triplet Embedding — `InitTriplet` (CTE)
+
+For structured time-series modalities (inputs, outputs, labs), each observation is a **triplet** `(variable_id, timestamp, value)`. These are three scalar quantities that need to be jointly embedded into a `d`-dimensional space.
+
+The **CTE (Continuous-Time Embedding)** approach embeds each scalar independently with a learned linear projection and sums them:
+
+```
+e_i = W_var · var_i + W_time · time_i + W_val · val_i    ∈ ℝ^d
+```
+
+where `W_var, W_time, W_val ∈ ℝ^(1×d)` are learned weight matrices. This additive structure means the model can learn to disentangle the contribution of each component to the embedding. The result is a sequence of `d`-dimensional vectors, one per observation.
+
+For microbiology, a **quadruplet** `(specimen_id, timestamp, organism_id, interpretation)` is used analogously via [`LabQuad`](Model-Code/subModules.py:122):
+
+```
+e_i = W_spec · spec_i + W_time · time_i + W_org · org_i + W_inter · inter_i    ∈ ℝ^d
+```
+
+For notes and CPT procedures, a [`TimeObsEncoder`](Model-Code/subModules.py:96) encodes the observation (a sentence embedding or procedure code) with a lazy linear layer and adds a Time2Vec positional encoding:
+
+```
+e_i = W · x_i + Time2Vec(time_i)    ∈ ℝ^d
+```
+
+---
+
+### 3. Transformer Encoder Block — `TransformerEncoderUnit`
+
+Each modality's sequence of embeddings `E = [e_1, ..., e_T] ∈ ℝ^(T×d)` is processed by `L` stacked Transformer encoder blocks. Each block applies:
+
+**Multi-Head Self-Attention:**
+
+```
+Attention(Q, K, V) = softmax(QK^T / √d_k) · V
+```
+
+With `h` heads, the model computes `h` attention functions in parallel on projected subspaces of dimension `d_k = d / h`, then concatenates and projects:
+
+```
+MultiHead(E) = Concat(head_1, ..., head_h) · W_O
+head_i = Attention(E·W_Q^i, E·W_K^i, E·W_V^i)
+```
+
+The `√d_k` scaling prevents the dot products from growing too large in magnitude, which would push the softmax into regions of very small gradients.
+
+**Add & Norm (residual connection + layer normalisation):**
+
+```
+E' = LayerNorm(E + MultiHead(E))
+```
+
+**Position-wise Feed-Forward Network:**
+
+```
+FFN(x) = ReLU(x · W_1 + b_1) · W_2 + b_2
+```
+
+with dropout (p=0.2) applied after the first ReLU.
+
+**Second Add & Norm:**
+
+```
+E'' = LayerNorm(E' + FFN(E'))
+```
+
+This is repeated `L` times (default `L=4`), with each layer refining the contextual representation of each observation in light of all others in the sequence.
+
+---
+
+### 4. Attention-Weighted Pooling — `AttFusion`
+
+After `L` Transformer layers, we have a sequence `E'' ∈ ℝ^(T×d)` of variable length `T` (different patients have different numbers of observations). To produce a **fixed-size** modality representation, `AttFusion` uses a learned attention mechanism:
+
+**Step 1 — Score projection:**
+
+```
+H = Tanh(E'' · W_1 · W_2 · ...)    ∈ ℝ^(T × d_att)
+```
+
+where the projection is a small MLP with GELU activations and dropout, mapping from `d` → `ffn_dims[0]` → ... → `ffn_dims[-1]`.
+
+**Step 2 — Scalar attention scores:**
+
+```
+a = H · u    ∈ ℝ^(T × 1)
+```
+
+where `u ∈ ℝ^(d_att × 1)` is a learned context vector.
+
+**Step 3 — Softmax normalisation:**
+
+```
+α = softmax(a)    ∈ ℝ^(T × 1)
+```
+
+**Step 4 — Weighted sum:**
+
+```
+z = Σ_t α_t · e''_t    ∈ ℝ^d
+```
+
+This produces a single `d`-dimensional vector `z` that is a weighted average of all observations, where the weights `α` are learned to focus on the most informative time points. Unlike mean pooling, this allows the model to attend more strongly to, e.g., a critical lab result or a deterioration event.
+
+---
+
+### 5. Multimodal Fusion and Condensation
+
+The seven modality representations are concatenated:
+
+```
+r = [z_dem ; z_micro ; z_cpt ; z_note ; z_lab ; z_out ; z_inp]    ∈ ℝ^(7d)
+```
+
+and passed through a linear **condensor**:
+
+```
+h = W_cond · r + b_cond    ∈ ℝ^(d_final)
+```
+
+where `d_final = 120` by default. This is the **patient embedding** — a compact, fixed-size representation of the entire patient record.
+
+---
+
+### 6. Training Objective — Classifier + Adversarial Discriminator
+
+The model is trained with a **two-head objective**:
+
+#### 6a. Classifier Head
+
+A 4-layer MLP with GELU activations maps the patient embedding to a mortality probability:
+
+```
+ŷ = σ(MLP_class(h))    ∈ (0, 1)
+```
+
+The classification loss is binary cross-entropy:
+
+```
+L_class = -[y · log(ŷ) + (1 - y) · log(1 - ŷ)]
+```
+
+where `y ∈ {0, 1}` is the ground-truth `EXPIRE_FLAG`.
+
+#### 6b. Discriminator Head
+
+A second MLP (`MLP_disc`) is trained to distinguish the real patient embedding `h` from a **random noise vector** `h̃ ~ Uniform(shape(h))`:
+
+```
+d_real = σ(MLP_disc(h))
+d_fake = σ(MLP_disc(h̃))
+```
+
+At each step, either the real or fake embedding is selected at random, and the discriminator is trained with binary cross-entropy to predict whether it is real (label=1) or fake (label=0):
+
+```
+L_disc = BCE(d, is_real)
+```
+
+#### 6c. Combined Loss
+
+```
+L_total = L_class + β · L_disc
+```
+
+The hyperparameter `β` controls the strength of the adversarial regularisation. A higher `β` forces the encoder to produce embeddings that are harder for the discriminator to distinguish from random noise — in effect, regularising the embedding space to be more uniform and less degenerate.
+
+> **Note**: The codebase also contains a commented-out [`GradientReversal`](Model-Code/gradient_reversal/module.py) layer. In the active implementation, the discriminator is trained jointly with the classifier (not adversarially against the encoder). The gradient reversal approach (described below) is an alternative formulation.
+
+---
+
+### 7. Gradient Reversal Layer (Alternative Formulation)
+
+The [`GradientReversal`](Model-Code/gradient_reversal/functional.py) layer implements a custom PyTorch `autograd.Function`:
+
+**Forward pass** — identity:
+```
+GRL(x) = x
+```
+
+**Backward pass** — negated and scaled gradient:
+```
+∂L/∂x|_GRL = -α · ∂L/∂(GRL(x))
+```
+
+This is implemented in [`functional.py`](Model-Code/gradient_reversal/functional.py:10):
+```python
+def backward(ctx, grad_output):
+    grad_input = -alpha * grad_output
+    return grad_input, None
+```
+
+When inserted between the encoder and the discriminator, the GRL causes the encoder to be updated in the direction that **maximises** the discriminator's loss (i.e., makes the embeddings harder to classify), while the discriminator itself is updated normally to **minimise** its own loss. This creates a minimax game:
+
+```
+min_{encoder, classifier} max_{discriminator}  L_class - α · L_disc
+```
+
+This is the domain-adversarial training formulation of [Ganin et al. (2016)](https://arxiv.org/abs/1505.07818), adapted here to regularise the embedding space rather than remove domain information.
+
+---
+
+### 8. Effective Rank and Isotropy
+
+The **effective rank** of the embedding matrix `E ∈ ℝ^(N×d)` is computed from the eigenvalue spectrum of its covariance matrix:
+
+```
+Σ = Cov(E)    ∈ ℝ^(d×d)
+λ_1 ≥ λ_2 ≥ ... ≥ λ_d ≥ 0    (eigenvalues)
+p_i = λ_i / Σ_j λ_j           (normalised)
+eff_rank = exp(-Σ_i p_i · log(p_i))    (exponential of entropy)
+```
+
+A perfectly isotropic embedding space (all eigenvalues equal) has `eff_rank = d`. A completely collapsed space (all variance on one axis) has `eff_rank = 1`. Higher effective rank means the model uses more of the available embedding dimensions, producing richer, less redundant representations.
+
+As shown in the Results section, beta=20 raises the effective rank from **3.48 → 4.49** and reduces the fraction of variance in the top principal component from **62% → 51.6%**, confirming that adversarial regularisation does produce more isotropic embeddings — at the cost of some classification accuracy.
 
 ---
 
